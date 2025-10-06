@@ -1,0 +1,26 @@
+# Core ML frameworks
+torch>=2.8.0
+torchvision>=0.23.0
+numpy>=2.2.0
+
+# Computer vision and image processing
+opencv-python>=4.12.0
+Pillow>=11.0.0
+
+# Visualization and plotting
+matplotlib>=3.10.0
+
+# SSL certificate fix for macOS
+pip-system-certs>=5.2
+
+# Typing support for older Python versions
+typing-extensions>=4.15.0
+
+# Testing framework
+pytest>=7.0.0
+
+# Optional development dependencies (uncomment if needed)
+# ruff>=0.1.0
+# black>=23.0.0
+# mypy>=1.0.0
+# pytest-cov>=4.0.0
