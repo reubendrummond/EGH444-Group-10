@@ -4,6 +4,7 @@ Modular segmentation trainer that works with any model and dataset configuration
 
 import os
 import time
+import inspect
 from typing import Dict, Any, Optional
 
 import numpy as np
@@ -42,7 +43,7 @@ class SegmentationTrainer:
         if config.early_stopping_enabled:
             self.early_stopping = EarlyStopping(
                 patience=config.early_stopping_patience,
-                metric=config.early_stopping_metric
+                metric=config.early_stopping_metric,
             )
 
     def _setup_device(self) -> torch.device:
@@ -126,8 +127,29 @@ class SegmentationTrainer:
         )
         return optimizer, criterion
 
+    def _is_dual_input_model(self, model: nn.Module) -> bool:
+        """
+        Detect if model expects dual inputs (RGB and depth separately).
+
+        Args:
+            model: The model to inspect
+
+        Returns:
+            True if model expects dual inputs, False for single input
+        """
+        # Get the forward method signature
+        forward_signature = inspect.signature(model.forward)
+        params = list(forward_signature.parameters.keys())
+
+        # Skip 'self' parameter
+        input_params = [p for p in params if p != 'self']
+
+        # Dual-input models should have 2 input parameters (e.g., 'rgb', 'depth')
+        # Single-input models should have 1 input parameter (e.g., 'x', 'input')
+        return len(input_params) >= 2
+
     def _extract_input_tensor(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Extract appropriate input tensor based on modality configuration."""
+        """Extract appropriate input tensor based on modality configuration (for single-input models)."""
         tensors = []
 
         if self.config.use_rgb:
@@ -141,13 +163,37 @@ class SegmentationTrainer:
         else:
             return torch.cat(tensors, dim=1)
 
+    def _forward_model(self, model: nn.Module, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Forward pass through model, handling both single-input and dual-input models.
+
+        Args:
+            model: The model to run forward pass
+            batch: Batch dictionary containing input data
+
+        Returns:
+            Model output tensor or dict
+        """
+        if self._is_dual_input_model(model):
+            # Dual-input model: pass RGB and depth separately
+            if not (self.config.use_rgb and self.config.use_depth):
+                raise ValueError("Dual-input models require both use_rgb=True and use_depth=True")
+
+            rgb = batch["image"]
+            depth = batch["depth"]
+            return model(rgb, depth)
+        else:
+            # Single-input model: use concatenated tensor
+            inputs = self._extract_input_tensor(batch)
+            return model(inputs)
+
     @torch.no_grad()
     def _compute_comprehensive_metrics(
         self,
         model: nn.Module,
         loader: DataLoader,
         criterion: nn.Module,
-        phase_name: str = "eval"
+        phase_name: str = "eval",
     ) -> Dict[str, Any]:
         """
         Compute comprehensive metrics (loss + mIoU + pixel accuracy) for any data loader.
@@ -165,18 +211,23 @@ class SegmentationTrainer:
 
         # Initialize metrics tracking
         total_loss = 0.0
-        cm = np.zeros((self.config.num_classes, self.config.num_classes), dtype=np.int64)
+        cm = np.zeros(
+            (self.config.num_classes, self.config.num_classes), dtype=np.int64
+        )
         total_pixels, correct_pixels = 0, 0
         num_batches = 0
 
         for batch in loader:
-            # Extract inputs and targets
-            inputs = self._extract_input_tensor(batch).to(self.device, non_blocking=True)
+            # Extract targets and move to device
             targets = batch["mask"].to(self.device, non_blocking=True)
+
+            # Move batch data to device
+            batch_on_device = {k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                             for k, v in batch.items()}
 
             # Forward pass with mixed precision
             with autocast(self.device.type, enabled=(self.device.type == "cuda")):
-                outputs = model(inputs)
+                outputs = self._forward_model(model, batch_on_device)
                 # Handle both dict and tensor outputs
                 if isinstance(outputs, dict):
                     outputs = outputs["out"]
@@ -202,7 +253,7 @@ class SegmentationTrainer:
                 # Update confusion matrix
                 cm_batch = np.bincount(
                     self.config.num_classes * valid_targets + valid_preds,
-                    minlength=self.config.num_classes ** 2
+                    minlength=self.config.num_classes**2,
                 ).reshape(self.config.num_classes, self.config.num_classes)
                 cm += cm_batch
 
@@ -230,10 +281,10 @@ class SegmentationTrainer:
         pixel_acc = correct_pixels / total_pixels if total_pixels > 0 else 0.0
 
         return {
-            'loss': avg_loss,
-            'mIoU': miou,
-            'PixelAcc': pixel_acc,
-            'IoU_per_class': iou_per_class
+            "loss": avg_loss,
+            "mIoU": miou,
+            "PixelAcc": pixel_acc,
+            "IoU_per_class": iou_per_class,
         }
 
     def train(self, model: nn.Module) -> nn.Module:
@@ -286,17 +337,19 @@ class SegmentationTrainer:
 
             for it, batch in enumerate(train_loader, start=1):
                 # Extract input based on modality configuration
-                inputs = self._extract_input_tensor(batch).to(
-                    self.device, non_blocking=True
-                )
+                # Extract targets and move to device
                 targets = batch["mask"].to(self.device, non_blocking=True)
+
+                # Move batch data to device
+                batch_on_device = {k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                                 for k, v in batch.items()}
 
                 # Zero gradients
                 optimizer.zero_grad(set_to_none=True)
 
                 # Forward pass with mixed precision
                 with autocast(self.device.type, enabled=(self.device.type == "cuda")):
-                    outputs = model(inputs)
+                    outputs = self._forward_model(model, batch_on_device)
                     # Handle both dict and tensor outputs
                     if isinstance(outputs, dict):
                         outputs = outputs["out"]
@@ -377,11 +430,11 @@ class SegmentationTrainer:
             # Print comprehensive timing summary
             total_time = time.time() - epoch_start
             time_breakdown = {
-                'train': train_time,
-                'train_eval': train_eval_time,
-                'val': val_time,
-                'save': save_time,
-                'total': total_time
+                "train": train_time,
+                "train_eval": train_eval_time,
+                "val": val_time,
+                "save": save_time,
+                "total": total_time,
             }
 
             # Calculate percentages
@@ -389,7 +442,9 @@ class SegmentationTrainer:
             val_pct = (val_time / total_time) * 100 if total_time > 0 else 0
             save_pct = (save_time / total_time) * 100 if total_time > 0 else 0
 
-            print(f"⏱️  Timing: Save({save_time:.1f}s) | Total({total_time:.1f}s) | Breakdown: Train({train_pct:.1f}%) Val({val_pct:.1f}%) Save({save_pct:.1f}%)")
+            print(
+                f"⏱️  Timing: Save({save_time:.1f}s) | Total({total_time:.1f}s) | Breakdown: Train({train_pct:.1f}%) Val({val_pct:.1f}%) Save({save_pct:.1f}%)"
+            )
 
             # Check early stopping
             if self.early_stopping is not None:
@@ -401,20 +456,26 @@ class SegmentationTrainer:
                 elif self.config.early_stopping_metric == "val_pixacc":
                     metric_value = val_metrics["PixelAcc"]
                 else:
-                    raise ValueError(f"Unsupported early stopping metric: {self.config.early_stopping_metric}")
+                    raise ValueError(
+                        f"Unsupported early stopping metric: {self.config.early_stopping_metric}"
+                    )
 
                 if self.early_stopping(epoch, metric_value):
                     print(f"🛑 Early stopping triggered at epoch {epoch}")
                     break
 
             # Overfitting detection warnings
-            train_val_gap_miou = train_metrics['mIoU'] - val_metrics['mIoU']
-            train_val_gap_loss = val_metrics['loss'] - train_metrics['loss']
+            train_val_gap_miou = train_metrics["mIoU"] - val_metrics["mIoU"]
+            train_val_gap_loss = val_metrics["loss"] - train_metrics["loss"]
 
             if train_val_gap_miou > 0.1:
-                print(f"⚠️  Potential overfitting: Train mIoU ({train_metrics['mIoU']:.4f}) >> Val mIoU ({val_metrics['mIoU']:.4f}), gap: {train_val_gap_miou:.4f}")
+                print(
+                    f"⚠️  Potential overfitting: Train mIoU ({train_metrics['mIoU']:.4f}) >> Val mIoU ({val_metrics['mIoU']:.4f}), gap: {train_val_gap_miou:.4f}"
+                )
             if train_val_gap_loss > 0.5:
-                print(f"⚠️  Potential overfitting: Val loss ({val_metrics['loss']:.4f}) >> Train loss ({train_metrics['loss']:.4f}), gap: {train_val_gap_loss:.4f}")
+                print(
+                    f"⚠️  Potential overfitting: Val loss ({val_metrics['loss']:.4f}) >> Train loss ({train_metrics['loss']:.4f}), gap: {train_val_gap_loss:.4f}"
+                )
 
         print("Training complete!")
         print(f"Best mIoU: {best_miou:.4f}")
@@ -461,18 +522,21 @@ class SegmentationTrainer:
         param_group = optimizer.param_groups[0]
 
         # Store old values and apply new ones
-        old_lr = param_group['lr']
-        old_weight_decay = param_group['weight_decay']
+        old_lr = param_group["lr"]
+        old_weight_decay = param_group["weight_decay"]
 
         # Apply current config values
-        param_group['lr'] = self.config.lr
-        param_group['weight_decay'] = self.config.weight_decay
+        param_group["lr"] = self.config.lr
+        param_group["weight_decay"] = self.config.weight_decay
 
         # Track changes
         if old_lr != self.config.lr:
-            changes['learning_rate'] = {'old': old_lr, 'new': self.config.lr}
+            changes["learning_rate"] = {"old": old_lr, "new": self.config.lr}
         if old_weight_decay != self.config.weight_decay:
-            changes['weight_decay'] = {'old': old_weight_decay, 'new': self.config.weight_decay}
+            changes["weight_decay"] = {
+                "old": old_weight_decay,
+                "new": self.config.weight_decay,
+            }
 
         return changes
 
@@ -596,15 +660,22 @@ class SegmentationTrainer:
             periodic_path = f"checkpoint_epoch_{epoch:03d}.pt"
             torch.save(checkpoint, periodic_path)
             periodic_time = time.time() - periodic_start
-            print(f"✓ Saved periodic checkpoint to {periodic_path} ({periodic_time:.1f}s)")
+            print(
+                f"✓ Saved periodic checkpoint to {periodic_path} ({periodic_time:.1f}s)"
+            )
 
         # Calculate checkpoint size for reference
         import os
+
         try:
-            checkpoint_size_mb = os.path.getsize(self.config.save_latest_path) / (1024 * 1024)
+            checkpoint_size_mb = os.path.getsize(self.config.save_latest_path) / (
+                1024 * 1024
+            )
         except:
             checkpoint_size_mb = 0
 
         # Print timing summary
         total_save_time = prep_time + latest_time + best_time + periodic_time
-        print(f"💾 Checkpoint timing: prep({prep_time:.1f}s) latest({latest_time:.1f}s) size({checkpoint_size_mb:.1f}MB) total({total_save_time:.1f}s)")
+        print(
+            f"💾 Checkpoint timing: prep({prep_time:.1f}s) latest({latest_time:.1f}s) size({checkpoint_size_mb:.1f}MB) total({total_save_time:.1f}s)"
+        )

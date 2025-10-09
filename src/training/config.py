@@ -125,6 +125,14 @@ class TrainingConfig:
         if not Path(self.data_root).exists():
             raise ValueError(f"data_root path does not exist: {self.data_root}")
 
+    def validate_for_dual_encoder(self):
+        """Validate configuration for dual-encoder models."""
+        if not (self.use_rgb and self.use_depth):
+            raise ValueError(
+                "Dual-encoder models require both use_rgb=True and use_depth=True. "
+                f"Current: use_rgb={self.use_rgb}, use_depth={self.use_depth}"
+            )
+
     @property
     def input_channels(self) -> int:
         """Calculate number of input channels based on modality flags."""

@@ -195,3 +195,4 @@ wandb/
 example_*.pt
 
 todo.md
+tests

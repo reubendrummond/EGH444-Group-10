@@ -94,6 +94,10 @@ def plot_training_curves(
     if not has_val_metrics and not has_train_loss:
         raise ValueError("No training metrics found in training history")
 
+    # Define consistent colors for training and validation across all subplots
+    train_color = '#1f77b4'  # Blue
+    val_color = '#ff7f0e'    # Orange
+
     # Create epochs array
     max_epochs = max(
         len(history['train_loss']),
@@ -121,10 +125,10 @@ def plot_training_curves(
         ax = axes[plot_idx]
         if has_train_loss:
             ax.plot(epochs[:len(history['train_loss'])], history['train_loss'],
-                   'r-', linewidth=2, marker='o', markersize=3, label='Training Loss')
+                   color=train_color, linewidth=2, marker='o', markersize=3, label='Training Loss')
         if history['val_loss']:
             ax.plot(epochs[:len(history['val_loss'])], history['val_loss'],
-                   'orange', linewidth=2, marker='s', markersize=3, label='Validation Loss')
+                   color=val_color, linewidth=2, marker='s', markersize=3, label='Validation Loss')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
         ax.set_title('Loss: Training vs Validation')
@@ -137,16 +141,31 @@ def plot_training_curves(
         ax = axes[plot_idx]
         if has_train_miou and history['train_miou']:
             ax.plot(epochs[:len(history['train_miou'])], history['train_miou'],
-                   'b--', linewidth=2, marker='s', markersize=3, alpha=0.7, label='Training mIoU')
+                   color=train_color, linestyle='--', linewidth=2, marker='s', markersize=3, alpha=0.7, label='Training mIoU')
         if history['val_miou']:
             ax.plot(epochs[:len(history['val_miou'])], history['val_miou'],
-                   'b-', linewidth=2, marker='o', markersize=3, label='Validation mIoU')
+                   color=val_color, linewidth=2, marker='o', markersize=3, label='Validation mIoU')
 
         ax.set_xlabel('Epoch')
         ax.set_ylabel('mIoU')
         ax.set_title('Mean IoU: Training vs Validation')
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(0, 1)
+
+        # Set y-axis limits based on actual data range for better visibility
+        all_miou_values = []
+        if history['val_miou']:
+            all_miou_values.extend(history['val_miou'])
+        if has_train_miou and history['train_miou']:
+            all_miou_values.extend(history['train_miou'])
+
+        if all_miou_values:
+            min_miou = min(all_miou_values)
+            max_miou = max(all_miou_values)
+            # Add 10% padding above and below the data range
+            padding = (max_miou - min_miou) * 0.1 if max_miou > min_miou else 0.05
+            ax.set_ylim(max(0, min_miou - padding), min(1, max_miou + padding))
+        else:
+            ax.set_ylim(0, 1)
 
         # Highlight best validation performance
         if show_best and history['val_miou']:
@@ -163,10 +182,10 @@ def plot_training_curves(
         ax = axes[plot_idx]
         if has_train_pixacc and history['train_pixacc']:
             ax.plot(epochs[:len(history['train_pixacc'])], history['train_pixacc'],
-                   'g--', linewidth=2, marker='s', markersize=3, alpha=0.7, label='Training Pixel Acc')
+                   color=train_color, linestyle='--', linewidth=2, marker='s', markersize=3, alpha=0.7, label='Training Pixel Acc')
         if history['val_pixacc']:
             ax.plot(epochs[:len(history['val_pixacc'])], history['val_pixacc'],
-                   'g-', linewidth=2, marker='o', markersize=3, label='Validation Pixel Acc')
+                   color=val_color, linewidth=2, marker='o', markersize=3, label='Validation Pixel Acc')
 
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Pixel Accuracy')
