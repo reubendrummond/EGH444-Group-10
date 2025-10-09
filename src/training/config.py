@@ -3,16 +3,58 @@ Training configuration dataclass for segmentation models.
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple, Literal, List
+from typing import Tuple, Literal, List, Optional
 from pathlib import Path
 
 
 @dataclass
 class TrainingHistory:
-    """Training history storage."""
+    """Training history storage for comprehensive experiment tracking."""
+
+    # Training metrics (per epoch)
     train_loss: List[float] = field(default_factory=list)
+    train_miou: List[float] = field(default_factory=list)
+    train_pixacc: List[float] = field(default_factory=list)
+
+    # Validation metrics (per epoch)
+    val_loss: List[float] = field(default_factory=list)
     val_miou: List[float] = field(default_factory=list)
     val_pixacc: List[float] = field(default_factory=list)
+
+    # Learning rate tracking
+    learning_rates: List[float] = field(default_factory=list)
+
+    # Timing information
+    epoch_times: List[float] = field(default_factory=list)
+
+    def add_epoch(self, epoch_data: dict) -> None:
+        """Add metrics for a completed epoch."""
+        self.train_loss.append(epoch_data.get("train_loss", 0.0))
+        self.train_miou.append(epoch_data.get("train_miou", 0.0))
+        self.train_pixacc.append(epoch_data.get("train_pixacc", 0.0))
+
+        self.val_loss.append(epoch_data.get("val_loss", 0.0))
+        self.val_miou.append(epoch_data.get("val_miou", 0.0))
+        self.val_pixacc.append(epoch_data.get("val_pixacc", 0.0))
+
+        self.learning_rates.append(epoch_data.get("learning_rate", 0.0))
+        self.epoch_times.append(epoch_data.get("epoch_time", 0.0))
+
+    def get_best_epoch(self, metric: str = "val_miou") -> tuple[int, float]:
+        """Get the epoch number and value of the best performance."""
+        if metric not in ["val_miou", "val_pixacc", "train_miou", "train_pixacc"]:
+            raise ValueError(f"Unsupported metric: {metric}")
+
+        values = getattr(self, metric)
+        if not values:
+            return 0, 0.0
+
+        best_idx = max(range(len(values)), key=lambda i: values[i])
+        return best_idx + 1, values[best_idx]  # 1-indexed epoch
+
+    def __len__(self) -> int:
+        """Return number of completed epochs."""
+        return len(self.train_loss)
 
 
 @dataclass
@@ -50,9 +92,21 @@ class TrainingConfig:
     # Loss and evaluation
     ignore_index: int = 255
 
-    # Logging and saving
+    # Checkpoint and resumption
     save_path: str = "checkpoint.pt"
+    save_best_path: str = "checkpoint_best.pt"
+    save_latest_path: str = "checkpoint_latest.pt"
+    save_every_n_epochs: int = 5  # Save checkpoint every N epochs (0 to disable)
+    resume_from: Optional[str] = None  # Path to resume training from
+    auto_resume: bool = True  # Automatically resume from latest if exists
+
+    # Logging and evaluation
     log_every: int = 1
+
+    # Early stopping
+    early_stopping_enabled: bool = False
+    early_stopping_patience: int = 5
+    early_stopping_metric: str = "val_miou"
 
     def __post_init__(self):
         """Validate configuration after initialization."""
