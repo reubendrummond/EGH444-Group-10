@@ -65,10 +65,24 @@ class SegmentationTrainer:
         # Initialize transforms with modality configuration
         train_tf = SegTrainTransform(
             size_hw=self.config.size_hw,
-            hflip_p=self.config.hflip,
+            # hflip_p=self.config.hflip,
             label_mode=self.config.label_mode,
             use_rgb=self.config.use_rgb,
             use_depth=self.config.use_depth,
+            hflip_p=0.3,
+            depth_noise_p=0.2,
+            depth_noise_std=0.025,  # Moderate noise
+            depth_dropout_p=0.2,  # Moderate dropout probability
+            depth_dropout_rate=0.04,  # Visible but not excessive
+            rotation_p=0.4,
+            rotation_angle=8.0,  # Reduced rotation angle
+            crop_zoom_p=0.3,
+            crop_scale_range=(0.85, 0.95),
+            color_jitter_p=0.6,  # Keep color effects visible
+            brightness_range=0.25,  # Still noticeable brightness
+            contrast_range=0.2,  # Good contrast variation
+            saturation_range=0.25,  # Visible saturation changes
+            hue_range=0.06,  # Subtle but visible hue shifts
         )
         val_tf = SegEvalTransform(
             size_hw=self.config.size_hw,
@@ -142,7 +156,7 @@ class SegmentationTrainer:
         params = list(forward_signature.parameters.keys())
 
         # Skip 'self' parameter
-        input_params = [p for p in params if p != 'self']
+        input_params = [p for p in params if p != "self"]
 
         # Dual-input models should have 2 input parameters (e.g., 'rgb', 'depth')
         # Single-input models should have 1 input parameter (e.g., 'x', 'input')
@@ -163,7 +177,9 @@ class SegmentationTrainer:
         else:
             return torch.cat(tensors, dim=1)
 
-    def _forward_model(self, model: nn.Module, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _forward_model(
+        self, model: nn.Module, batch: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         """
         Forward pass through model, handling both single-input and dual-input models.
 
@@ -177,7 +193,9 @@ class SegmentationTrainer:
         if self._is_dual_input_model(model):
             # Dual-input model: pass RGB and depth separately
             if not (self.config.use_rgb and self.config.use_depth):
-                raise ValueError("Dual-input models require both use_rgb=True and use_depth=True")
+                raise ValueError(
+                    "Dual-input models require both use_rgb=True and use_depth=True"
+                )
 
             rgb = batch["image"]
             depth = batch["depth"]
@@ -222,8 +240,14 @@ class SegmentationTrainer:
             targets = batch["mask"].to(self.device, non_blocking=True)
 
             # Move batch data to device
-            batch_on_device = {k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-                             for k, v in batch.items()}
+            batch_on_device = {
+                k: (
+                    v.to(self.device, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                )
+                for k, v in batch.items()
+            }
 
             # Forward pass with mixed precision
             with autocast(self.device.type, enabled=(self.device.type == "cuda")):
@@ -341,8 +365,14 @@ class SegmentationTrainer:
                 targets = batch["mask"].to(self.device, non_blocking=True)
 
                 # Move batch data to device
-                batch_on_device = {k: v.to(self.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-                                 for k, v in batch.items()}
+                batch_on_device = {
+                    k: (
+                        v.to(self.device, non_blocking=True)
+                        if isinstance(v, torch.Tensor)
+                        else v
+                    )
+                    for k, v in batch.items()
+                }
 
                 # Zero gradients
                 optimizer.zero_grad(set_to_none=True)
